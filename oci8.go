@@ -635,6 +635,9 @@ func (s *OCI8Stmt) Query(args []driver.Value) (rows driver.Rows, err error) {
 				&oci8cols[i].rlen,
 				nil,
 				C.OCI_DEFAULT)
+			if rv == C.OCI_ERROR {
+				return nil, ociGetError(s.c.err)
+			}
 		} else if tp == C.SQLT_TIMESTAMP {
 			rv = C.OCIDescriptorAlloc(
 				s.c.env,
