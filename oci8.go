@@ -574,7 +574,7 @@ func (s *OCI8Stmt) Query(args []driver.Value) (rows driver.Rows, err error) {
 		var np *C.char
 		var ns C.ub4
 		var tp C.ub2
-		var lp C.ub2
+		var lp C.ub4
 		C.OCIParamGet(
 			s.s,
 			C.OCI_HTYPE_STMT,
