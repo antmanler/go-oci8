@@ -84,7 +84,7 @@ break_loop:
 	}
 
 	if !strings.HasPrefix(dsnString, "oracle://") {
-		dsnString = "oracle://" +  dsnString
+		dsnString = "oracle://" + dsnString
 	}
 	u, err := url.Parse(dsnString)
 	if err != nil {
@@ -344,7 +344,7 @@ func (s *OCI8Stmt) bind(args []driver.Value) (freeBoundParameters func(), err er
 	freeBoundParameters = func() {
 		for _, col := range boundParameters {
 			if col.pbuf != nil {
-				if col.kind == C.SQLT_CLOB || col.kind == C.SQLT_BLOB {
+				if col.kind == C.SQLT_CLOB || col.kind == C.SQLT_BLOB || col.kind == C.SQLT_TIMESTAMP {
 					C.OCIDescriptorFree(
 						col.pbuf,
 						C.OCI_DTYPE_LOB)
@@ -635,6 +635,31 @@ func (s *OCI8Stmt) Query(args []driver.Value) (rows driver.Rows, err error) {
 				&oci8cols[i].rlen,
 				nil,
 				C.OCI_DEFAULT)
+		} else if tp == C.SQLT_TIMESTAMP {
+			rv = C.OCIDescriptorAlloc(
+				s.c.env,
+				&oci8cols[i].pbuf,
+				C.OCI_DTYPE_TIMESTAMP,
+				0,
+				nil)
+			if rv == C.OCI_ERROR {
+				return nil, ociGetError(s.c.err)
+			}
+			rv = C.OCIDefineByPos(
+				(*C.OCIStmt)(s.s),
+				&defp,
+				(*C.OCIError)(s.c.err),
+				C.ub4(i+1),
+				unsafe.Pointer(&oci8cols[i].pbuf),
+				-1,
+				oci8cols[i].kind,
+				unsafe.Pointer(&oci8cols[i].ind),
+				&oci8cols[i].rlen,
+				nil,
+				C.OCI_DEFAULT)
+			if rv == C.OCI_ERROR {
+				return nil, ociGetError(s.c.err)
+			}
 		} else {
 			oci8cols[i].pbuf = C.malloc(C.size_t(lp) + 1)
 			rv = C.OCIDefineByPos(
@@ -796,6 +821,42 @@ func (rc *OCI8Rows) Next(dest []driver.Value) error {
 			//TODO Handle BCE dates (http://docs.oracle.com/cd/B12037_01/appdev.101/b10779/oci03typ.htm#438305)
 			//TODO Handle timezones (http://docs.oracle.com/cd/B12037_01/appdev.101/b10779/oci03typ.htm#443601)
 			datestr := fmt.Sprintf(dateStrFmt, ((int(buf[0])-100)*100)+(int(buf[1])-100), int(buf[2]), int(buf[3]), int(buf[4])-1, int(buf[5])-1, int(buf[6])-1)
+			dest[i], err = time.ParseInLocation(dateFmt, datestr, rc.s.c.location)
+			if err != nil {
+				return fmt.Errorf("Unknown date format:", err)
+			}
+		case C.SQLT_TIMESTAMP:
+			var year C.sb2
+			var month C.ub1
+			var day C.ub1
+			var hour C.ub1
+			var minute C.ub1
+			var sec C.ub1
+			var fsec C.ub4
+			rv = C.OCIDateTimeGetDate(
+				rc.s.c.env,
+				(*C.OCIError)(rc.s.c.err),
+				(*C.OCIDateTime)(rc.cols[i].pbuf),
+				&year,
+				&month,
+				&day,
+			)
+			if rv == C.OCI_ERROR {
+				return ociGetError(rc.s.c.err)
+			}
+			rv = C.OCIDateTimeGetTime(
+				rc.s.c.env,
+				(*C.OCIError)(rc.s.c.err),
+				(*C.OCIDateTime)(rc.cols[i].pbuf),
+				&hour,
+				&minute,
+				&sec,
+				&fsec,
+			)
+			if rv == C.OCI_ERROR {
+				return ociGetError(rc.s.c.err)
+			}
+			datestr := fmt.Sprintf(dateStrFmt, int(year), int(month), int(day), int(hour), int(minute), int(sec))
 			dest[i], err = time.ParseInLocation(dateFmt, datestr, rc.s.c.location)
 			if err != nil {
 				return fmt.Errorf("Unknown date format:", err)
