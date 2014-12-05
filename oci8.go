@@ -344,7 +344,7 @@ func (s *OCI8Stmt) bind(args []driver.Value) (freeBoundParameters func(), err er
 	freeBoundParameters = func() {
 		for _, col := range boundParameters {
 			if col.pbuf != nil {
-				if col.kind == C.SQLT_CLOB || col.kind == C.SQLT_BLOB || col.kind == C.SQLT_TIMESTAMP {
+				if col.kind == C.SQLT_CLOB || col.kind == C.SQLT_BLOB || col.kind == C.SQLT_TIMESTAMP || col.kind == C.SQLT_TIMESTAMP_TZ || col.kind == C.SQLT_TIMESTAMP_LTZ {
 					C.OCIDescriptorFree(
 						col.pbuf,
 						C.OCI_DTYPE_LOB)
@@ -638,11 +638,11 @@ func (s *OCI8Stmt) Query(args []driver.Value) (rows driver.Rows, err error) {
 			if rv == C.OCI_ERROR {
 				return nil, ociGetError(s.c.err)
 			}
-		} else if tp == C.SQLT_TIMESTAMP {
+		} else if tp == C.SQLT_TIMESTAMP || tp == C.SQLT_TIMESTAMP_TZ || tp == C.SQLT_TIMESTAMP_LTZ {
 			rv = C.OCIDescriptorAlloc(
 				s.c.env,
 				&oci8cols[i].pbuf,
-				C.OCI_DTYPE_TIMESTAMP,
+				tp,
 				0,
 				nil)
 			if rv == C.OCI_ERROR {
@@ -828,7 +828,7 @@ func (rc *OCI8Rows) Next(dest []driver.Value) error {
 			if err != nil {
 				return fmt.Errorf("Unknown date format:", err)
 			}
-		case C.SQLT_TIMESTAMP:
+		case C.SQLT_TIMESTAMP, C.SQLT_TIMESTAMP_TZ, C.SQLT_TIMESTAMP_LTZ:
 			var year C.sb2
 			var month C.ub1
 			var day C.ub1
@@ -859,10 +859,22 @@ func (rc *OCI8Rows) Next(dest []driver.Value) error {
 			if rv == C.OCI_ERROR {
 				return ociGetError(rc.s.c.err)
 			}
-			datestr := fmt.Sprintf(dateStrFmt, int(year), int(month), int(day), int(hour), int(minute), int(sec))
-			dest[i], err = time.ParseInLocation(dateFmt, datestr, rc.s.c.location)
-			if err != nil {
-				return fmt.Errorf("Unknown date format:", err)
+			if rc.cols[i].kind == C.SQLT_TIMESTAMP_TZ {
+				var offsHour C.sb1
+				var offsMin C.sb1
+				C.OCIDateTimeGetTimeZoneOffset(
+					rc.s.c.env,
+					(*C.OCIError)(rc.s.c.err),
+					(*C.OCIDateTime)(rc.cols[i].pbuf),
+					&offsHour,
+					&offsMin,
+				)
+				if rv == C.OCI_ERROR {
+					return ociGetError(rc.s.c.err)
+				}
+				dest[i] = time.Date(int(year), time.Month(month), int(day), int(hour), int(minute), int(sec), int(fsec), time.UTC).Sub(time.Hour*time.Duration(offsHour) + time.Minute*time.Duration(offsMin))
+			} else {
+				dest[i] = time.Date(int(year), time.Month(month), int(day), int(hour), int(minute), int(sec), int(fsec), rc.s.c.location)
 			}
 		case C.SQLT_BLOB, C.SQLT_CLOB:
 			var bamt C.ub4
