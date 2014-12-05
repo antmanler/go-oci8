@@ -866,6 +866,7 @@ func (rc *OCI8Rows) Next(dest []driver.Value) error {
 			}
 		case C.SQLT_BLOB, C.SQLT_CLOB:
 			var bamt C.ub4
+			bamt = rc.cols[i].size
 			b := make([]byte, rc.cols[i].size)
 			rv = C.OCILobRead(
 				(*C.OCISvcCtx)(rc.s.c.svc),
