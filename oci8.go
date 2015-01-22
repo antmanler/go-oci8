@@ -642,10 +642,19 @@ func (s *OCI8Stmt) Query(args []driver.Value) (rows driver.Rows, err error) {
 				return nil, ociGetError(s.c.err)
 			}
 		} else if tp == C.SQLT_TIMESTAMP || tp == C.SQLT_TIMESTAMP_TZ || tp == C.SQLT_TIMESTAMP_LTZ {
+			var ocitp C.ub4
+			switch tp {
+			case C.SQLT_TIMESTAMP:
+				ocitp = C.OCI_DTYPE_TIMESTAMP
+			case C.SQLT_TIMESTAMP_TZ:
+				ocitp = C.OCI_DTYPE_TIMESTAMP_TZ
+			case C.SQLT_TIMESTAMP_LTZ:
+				ocitp = C.OCI_DTYPE_TIMESTAMP_LTZ
+			}
 			rv = C.OCIDescriptorAlloc(
 				s.c.env,
 				&oci8cols[i].pbuf,
-				tp,
+				ocitp,
 				0,
 				nil)
 			if rv == C.OCI_ERROR {
@@ -873,13 +882,13 @@ func (rc *OCI8Rows) Next(dest []driver.Value) error {
 				if rv == C.OCI_ERROR {
 					return ociGetError(rc.s.c.err)
 				}
-				dest[i] = time.Date(int(year), time.Month(month), int(day), int(hour), int(minute), int(sec), int(fsec), time.UTC).Sub(time.Hour*time.Duration(offsHour) + time.Minute*time.Duration(offsMin))
+				dest[i] = time.Date(int(year), time.Month(month), int(day), int(hour), int(minute), int(sec), int(fsec), time.UTC).Add(-1 * (time.Hour*time.Duration(offsHour) + time.Minute*time.Duration(offsMin)))
 			} else {
 				dest[i] = time.Date(int(year), time.Month(month), int(day), int(hour), int(minute), int(sec), int(fsec), rc.s.c.location)
 			}
 		case C.SQLT_BLOB, C.SQLT_CLOB:
 			var bamt C.ub4
-			bamt = rc.cols[i].size
+			bamt = C.ub4(rc.cols[i].size)
 			b := make([]byte, rc.cols[i].size)
 			rv = C.OCILobRead(
 				(*C.OCISvcCtx)(rc.s.c.svc),
