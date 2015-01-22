@@ -344,7 +344,7 @@ func (s *OCI8Stmt) bind(args []driver.Value) (freeBoundParameters func(), err er
 	freeBoundParameters = func() {
 		for _, col := range boundParameters {
 			if col.pbuf != nil {
-				if col.kind == C.SQLT_CLOB || col.kind == C.SQLT_BLOB {
+				if col.kind == C.SQLT_CLOB || col.kind == C.SQLT_BLOB || col.kind == C.SQLT_TIMESTAMP || col.kind == C.SQLT_TIMESTAMP_TZ || col.kind == C.SQLT_TIMESTAMP_LTZ {
 					C.OCIDescriptorFree(
 						col.pbuf,
 						C.OCI_DTYPE_LOB)
@@ -574,7 +574,7 @@ func (s *OCI8Stmt) Query(args []driver.Value) (rows driver.Rows, err error) {
 		var np *C.char
 		var ns C.ub4
 		var tp C.ub2
-		var lp C.ub2
+		var lp C.ub4
 		C.OCIParamGet(
 			s.s,
 			C.OCI_HTYPE_STMT,
@@ -635,6 +635,34 @@ func (s *OCI8Stmt) Query(args []driver.Value) (rows driver.Rows, err error) {
 				&oci8cols[i].rlen,
 				nil,
 				C.OCI_DEFAULT)
+			if rv == C.OCI_ERROR {
+				return nil, ociGetError(s.c.err)
+			}
+		} else if tp == C.SQLT_TIMESTAMP || tp == C.SQLT_TIMESTAMP_TZ || tp == C.SQLT_TIMESTAMP_LTZ {
+			rv = C.OCIDescriptorAlloc(
+				s.c.env,
+				&oci8cols[i].pbuf,
+				tp,
+				0,
+				nil)
+			if rv == C.OCI_ERROR {
+				return nil, ociGetError(s.c.err)
+			}
+			rv = C.OCIDefineByPos(
+				(*C.OCIStmt)(s.s),
+				&defp,
+				(*C.OCIError)(s.c.err),
+				C.ub4(i+1),
+				unsafe.Pointer(&oci8cols[i].pbuf),
+				-1,
+				oci8cols[i].kind,
+				unsafe.Pointer(&oci8cols[i].ind),
+				&oci8cols[i].rlen,
+				nil,
+				C.OCI_DEFAULT)
+			if rv == C.OCI_ERROR {
+				return nil, ociGetError(s.c.err)
+			}
 		} else {
 			oci8cols[i].pbuf = C.malloc(C.size_t(lp) + 1)
 			rv = C.OCIDefineByPos(
@@ -798,8 +826,57 @@ func (rc *OCI8Rows) Next(dest []driver.Value) error {
 				int(buf[6])-1,
 				0,
 				rc.s.c.location)
+		case C.SQLT_TIMESTAMP, C.SQLT_TIMESTAMP_TZ, C.SQLT_TIMESTAMP_LTZ:
+			var year C.sb2
+			var month C.ub1
+			var day C.ub1
+			var hour C.ub1
+			var minute C.ub1
+			var sec C.ub1
+			var fsec C.ub4
+			rv = C.OCIDateTimeGetDate(
+				rc.s.c.env,
+				(*C.OCIError)(rc.s.c.err),
+				(*C.OCIDateTime)(rc.cols[i].pbuf),
+				&year,
+				&month,
+				&day,
+			)
+			if rv == C.OCI_ERROR {
+				return ociGetError(rc.s.c.err)
+			}
+			rv = C.OCIDateTimeGetTime(
+				rc.s.c.env,
+				(*C.OCIError)(rc.s.c.err),
+				(*C.OCIDateTime)(rc.cols[i].pbuf),
+				&hour,
+				&minute,
+				&sec,
+				&fsec,
+			)
+			if rv == C.OCI_ERROR {
+				return ociGetError(rc.s.c.err)
+			}
+			if rc.cols[i].kind == C.SQLT_TIMESTAMP_TZ {
+				var offsHour C.sb1
+				var offsMin C.sb1
+				C.OCIDateTimeGetTimeZoneOffset(
+					rc.s.c.env,
+					(*C.OCIError)(rc.s.c.err),
+					(*C.OCIDateTime)(rc.cols[i].pbuf),
+					&offsHour,
+					&offsMin,
+				)
+				if rv == C.OCI_ERROR {
+					return ociGetError(rc.s.c.err)
+				}
+				dest[i] = time.Date(int(year), time.Month(month), int(day), int(hour), int(minute), int(sec), int(fsec), time.UTC).Sub(time.Hour*time.Duration(offsHour) + time.Minute*time.Duration(offsMin))
+			} else {
+				dest[i] = time.Date(int(year), time.Month(month), int(day), int(hour), int(minute), int(sec), int(fsec), rc.s.c.location)
+			}
 		case C.SQLT_BLOB, C.SQLT_CLOB:
 			var bamt C.ub4
+			bamt = rc.cols[i].size
 			b := make([]byte, rc.cols[i].size)
 			rv = C.OCILobRead(
 				(*C.OCISvcCtx)(rc.s.c.svc),
